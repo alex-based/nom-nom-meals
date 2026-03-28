@@ -3,7 +3,9 @@
  *
  * Strategy (in order of preference):
  *  1. JSON-LD with @type "Recipe" (schema.org) — most reliable, widely supported.
- *  2. OpenGraph / <meta> title as a last-resort fallback for the title.
+ *  2. HTML microdata (itemprop attributes) — used by many European recipe blogs
+ *     that don't emit JSON-LD (e.g. aniagotuje.pl).
+ *  3. OpenGraph / <meta> / <title> as a last-resort title fallback.
  *
  * All inference is pure (no network calls). The route handler is responsible for
  * fetching the HTML and passing it here.
@@ -24,12 +26,19 @@ export interface ParseResult {
 }
 
 export function parseRecipeFromHtml(html: string): ParseResult {
+  // Strategy 1: JSON-LD
   const jsonLd = extractJsonLd(html);
   if (jsonLd) {
     return { draft: draftFromJsonLd(jsonLd), richData: true };
   }
 
-  // Bare-minimum fallback: at least populate the title.
+  // Strategy 2: HTML microdata (itemprop)
+  const microdata = extractMicrodata(html);
+  if (microdata) {
+    return { draft: draftFromJsonLd(microdata), richData: true };
+  }
+
+  // Strategy 3: bare-minimum fallback — at least populate the title.
   const title = extractMetaTitle(html) ?? "";
   return {
     draft: emptyDraftWithTitle(title),
@@ -83,6 +92,92 @@ function isRecipeType(value: unknown): boolean {
   if (typeof value === "string") return value === "Recipe";
   if (Array.isArray(value)) return value.includes("Recipe");
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// HTML microdata extraction (itemprop / itemscope)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts schema.org/Recipe data from HTML microdata attributes.
+ * Returns a SchemaRecipe-shaped object so it can be fed into draftFromJsonLd.
+ *
+ * Handles patterns like:
+ *   <span itemprop="name">Babka budyniowa</span>
+ *   <li itemprop="recipeIngredient">2 jajka</li>
+ *   <meta itemprop="prepTime" content="PT20M">
+ *   <span itemprop="recipeYield">8</span>
+ */
+function extractMicrodata(html: string): SchemaRecipe | null {
+  // Only proceed if the page actually contains recipe microdata.
+  if (!/itemtype=["'][^"']*schema\.org\/Recipe["']/i.test(html)) return null;
+
+  function getItemprop(prop: string): string | null {
+    // <meta itemprop="X" content="Y"> — used for machine-readable values
+    const metaRe = new RegExp(
+      `<meta[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`,
+      "i",
+    );
+    const metaMatch = metaRe.exec(html);
+    if (metaMatch) return metaMatch[1].trim();
+
+    // <X itemprop="Y" content="Z"> — datetime / link elements
+    const contentRe = new RegExp(
+      `<[a-z]+[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`,
+      "i",
+    );
+    const contentMatch = contentRe.exec(html);
+    if (contentMatch) return contentMatch[1].trim();
+
+    // <X itemprop="Y">text</X>
+    const textRe = new RegExp(
+      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`,
+      "i",
+    );
+    const textMatch = textRe.exec(html);
+    if (textMatch) return stripTags(textMatch[1]).trim();
+
+    return null;
+  }
+
+  function getAllItemprop(prop: string): string[] {
+    const results: string[] = [];
+    const re = new RegExp(
+      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`,
+      "gi",
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const text = stripTags(m[1]).trim();
+      if (text) results.push(text);
+    }
+    return results;
+  }
+
+  const name = getItemprop("name");
+  if (!name) return null; // Not enough data.
+
+  // Nutrition calories may be nested: itemprop="calories" inside itemprop="nutrition"
+  const caloriesRaw = getItemprop("calories");
+  const nutrition = caloriesRaw ? { calories: caloriesRaw } : undefined;
+
+  return {
+    name,
+    prepTime: getItemprop("prepTime") ?? undefined,
+    cookTime: getItemprop("cookTime") ?? undefined,
+    totalTime: getItemprop("totalTime") ?? undefined,
+    recipeYield: getItemprop("recipeYield") ?? undefined,
+    recipeIngredient: getAllItemprop("recipeIngredient"),
+    recipeInstructions: getAllItemprop("recipeInstructions").join("\n") || getItemprop("recipeInstructions") || undefined,
+    recipeCategory: getItemprop("recipeCategory") ?? undefined,
+    keywords: getItemprop("keywords") ?? undefined,
+    description: getItemprop("description") ?? undefined,
+    nutrition,
+  };
+}
+
+function stripTags(html: string): string {
+  return html.replace(/<[^>]+>/g, " ").replace(/\s{2,}/g, " ").trim();
 }
 
 // ---------------------------------------------------------------------------
