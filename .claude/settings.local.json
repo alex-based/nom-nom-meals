@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(findstr /i scripts)",
+      "Bash(if not:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(command -v npm)",
+      "Bash(ls \"E:\\\\Claude_Playground\\\\meal planner\\\\family-meal-planner\\\\node_modules\\\\.bin\"\" 2>/dev/null | grep -i next || ls \"E:Claude_Playgroundmeal plannerfamily-meal-plannernode_modules.bin \")",
+      "Bash(grep -r surface-strong '/e/Claude_Playground/meal planner/family-meal-planner' --include=*.tsx --include=*.ts --include=*.css --include=*.js -l)",
+      "Bash(python3 /home/alexkhlopenko/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.5.0/.claude/skills/ui-ux-pro-max/scripts/search.py \"family meal planner household productivity warm cozy\" --design-system -p \"Family Meal Planner\" -f markdown)",
+      "Bash(python3 /home/alexkhlopenko/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.5.0/.claude/skills/ui-ux-pro-max/scripts/search.py \"form validation feedback accessibility\" --domain ux -n 8)",
+      "Bash(python3 /home/alexkhlopenko/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.5.0/.claude/skills/ui-ux-pro-max/scripts/search.py \"keyboard focus accessibility reduced-motion\" --domain web -n 8)",
+      "Bash(node_modules/.bin/next build:*)",
+      "Bash(npx --no-install next build)",
+      "Bash(node /home/alexkhlopenko/claudeprojects/family-meal-planner/node_modules/next/dist/bin/next build)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git -C /home/alexkhlopenko/claudeprojects/family-meal-planner init)",
+      "Bash(git -C /home/alexkhlopenko/claudeprojects/family-meal-planner add src/app/globals.css src/components/app-shell.tsx)",
+      "Bash(git -C:*)",
+      "Bash(npx next:*)",
+      "Bash(chmod +x /home/alexkhlopenko/claudeprojects/family-meal-planner/node_modules/.bin/next)",
+      "Bash(npm rebuild:*)",
+      "Bash(ls /home/alexkhlopenko/claudeprojects/family-meal-planner/node_modules/lightningcss/node/*.node)",
+      "Bash(ls /home/alexkhlopenko/claudeprojects/family-meal-planner/node_modules/lightningcss/*.node)",
+      "Bash(npm install:*)",
+      "Bash(pkill -f \"next build\")",
+      "Bash(npx tsc:*)",
+      "Bash(chmod +x node_modules/.bin/eslint)",
+      "Bash(node_modules/.bin/eslint src/)"
+    ]
+  }
+}
