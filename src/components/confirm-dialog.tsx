@@ -60,7 +60,11 @@ export function ConfirmDialog({
           ),
         ).filter((el) => !el.hasAttribute("disabled"));
 
-        if (focusable.length === 0) return;
+        // Prevent Tab from escaping the dialog even when all elements are disabled
+        if (focusable.length === 0) {
+          e.preventDefault();
+          return;
+        }
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
 

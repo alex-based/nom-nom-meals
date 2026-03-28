@@ -207,7 +207,11 @@ export function WeekPlanner() {
           <div className="grid grid-cols-7 gap-3" style={{ minWidth: "1120px" }}>
           {Array.from({ length: 7 }, (_, dayIndex) => {
             const date = getDateForIsoWeek(selection.isoYear, selection.isoWeek, dayIndex);
-            const isToday = date.toDateString() === today.toDateString();
+            // date is UTC midnight; compare against local calendar date of today
+            const isToday =
+              date.getUTCFullYear() === today.getFullYear() &&
+              date.getUTCMonth() === today.getMonth() &&
+              date.getUTCDate() === today.getDate();
 
             return (
               <article
