@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DIFFICULTIES, MEAL_SLOTS, UNIT_OPTIONS } from "@/lib/constants";
 import { createId } from "@/lib/planner";
 import { Recipe, RecipeDraft } from "@/lib/types";
+import type { ParseResult } from "@/lib/recipe-parser";
 
 function emptyDraft(): RecipeDraft {
   return {
@@ -51,6 +52,8 @@ export function RecipesView() {
   const [mealFilter, setMealFilter] = useState<"All" | (typeof MEAL_SLOTS)[number]>("All");
   const [draft, setDraft] = useState<RecipeDraft>(emptyDraft());
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [importUrl, setImportUrl] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const deferredSearch = useDeferredValue(search);
 
@@ -98,6 +101,47 @@ export function RecipesView() {
     setConfirmArchiveId(null);
     setSelectedRecipeId(null);
     setDraft(emptyDraft());
+  };
+
+  const importFromUrl = async () => {
+    const url = importUrl.trim();
+    if (!url) return;
+    setImporting(true);
+    try {
+      const response = await fetch("/api/parse-recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const json = (await response.json()) as { draft?: RecipeDraft; richData?: boolean; error?: string };
+      if (!response.ok || json.error) {
+        toast(json.error ?? "Could not import recipe.", "error");
+        return;
+      }
+      const result = json as ParseResult;
+      startTransition(() => {
+        setSelectedRecipeId(null);
+        setDraft({
+          ...result.draft,
+          // Ensure every ingredient has a fresh local id.
+          ingredients: result.draft.ingredients.map((ing) => ({
+            ...ing,
+            id: createId("ingredient"),
+          })),
+        });
+        setImportUrl("");
+      });
+      toast(
+        result.richData
+          ? "Recipe imported — review and save."
+          : "Page imported — rich data not found, please fill in the details.",
+        result.richData ? "success" : "info",
+      );
+    } catch {
+      toast("Network error while importing.", "error");
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
@@ -210,6 +254,27 @@ export function RecipesView() {
             }}
           >
             Start fresh
+          </button>
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <input
+            value={importUrl}
+            placeholder="Paste a recipe URL to import…"
+            onChange={(event) => setImportUrl(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") importFromUrl(); }}
+            aria-label="Recipe URL to import"
+            disabled={importing}
+            className="flex-1"
+          />
+          <button
+            type="button"
+            className="shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold button-secondary disabled:opacity-50"
+            onClick={importFromUrl}
+            disabled={importing || !importUrl.trim()}
+            aria-label="Import recipe from URL"
+          >
+            {importing ? "Importing…" : "Import"}
           </button>
         </div>
 
