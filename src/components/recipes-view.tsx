@@ -112,11 +112,8 @@ export function RecipesView() {
       />
       <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
       <section className="rounded-[30px] bg-surface-strong p-5 shadow-[0_18px_50px_rgba(106,79,49,0.07)]">
-        <div className="space-y-2">
-          <p className="pill inline-flex w-fit text-xs uppercase tracking-[0.24em] text-muted">
-            Recipe Database
-          </p>
-          <h2 className="section-title text-3xl">Build your family favorites</h2>
+        <div className="space-y-1">
+          <h2 className="section-title text-3xl">Recipe database</h2>
           <p className="section-subtitle text-sm">
             Keep recipe setup lightweight, but detailed enough for smart planning later.
           </p>
@@ -224,97 +221,111 @@ export function RecipesView() {
               onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
               aria-label="Recipe title"
             />
-            <select
-              value={draft.mealType}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  mealType: event.target.value as RecipeDraft["mealType"],
-                }))
-              }
-              aria-label="Meal type"
-            >
-              {MEAL_SLOTS.map((slot) => (
-                <option key={slot} value={slot}>
-                  {slot}
-                </option>
-              ))}
-            </select>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Meal type</span>
+              <select
+                value={draft.mealType}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mealType: event.target.value as RecipeDraft["mealType"],
+                  }))
+                }
+                aria-label="Meal type"
+              >
+                {MEAL_SLOTS.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="grid gap-3 md:grid-cols-4">
-            <input
-              type="number"
-              min={1}
-              value={draft.baseServings}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, baseServings: Number(event.target.value) }))
-              }
-              placeholder="Base servings"
-              aria-label="Base servings"
-              inputMode="numeric"
-            />
-            <input
-              type="number"
-              min={0}
-              value={draft.prepTimeMinutes}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  prepTimeMinutes: Number(event.target.value),
-                }))
-              }
-              placeholder="Prep"
-              aria-label="Prep time in minutes"
-              inputMode="numeric"
-            />
-            <input
-              type="number"
-              min={0}
-              value={draft.cookTimeMinutes}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  cookTimeMinutes: Number(event.target.value),
-                }))
-              }
-              placeholder="Cook"
-              aria-label="Cook time in minutes"
-              inputMode="numeric"
-            />
-            <input
-              type="number"
-              min={0}
-              value={draft.caloriesPerServing}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  caloriesPerServing: Number(event.target.value),
-                }))
-              }
-              placeholder="Calories"
-              aria-label="Calories per serving"
-              inputMode="numeric"
-            />
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Servings</span>
+              <input
+                type="number"
+                min={1}
+                value={draft.baseServings}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, baseServings: Number(event.target.value) }))
+                }
+                aria-label="Base servings"
+                inputMode="numeric"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Prep (min)</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.prepTimeMinutes}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    prepTimeMinutes: Number(event.target.value),
+                  }))
+                }
+                aria-label="Prep time in minutes"
+                inputMode="numeric"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Cook (min)</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.cookTimeMinutes}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    cookTimeMinutes: Number(event.target.value),
+                  }))
+                }
+                aria-label="Cook time in minutes"
+                inputMode="numeric"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Calories / srv</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.caloriesPerServing}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    caloriesPerServing: Number(event.target.value),
+                  }))
+                }
+                aria-label="Calories per serving"
+                inputMode="numeric"
+              />
+            </label>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr]">
-            <select
-              value={draft.difficulty}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  difficulty: event.target.value as RecipeDraft["difficulty"],
-                }))
-              }
-              aria-label="Difficulty"
-            >
-              {DIFFICULTIES.map((difficulty) => (
-                <option key={difficulty} value={difficulty}>
-                  {difficulty}
-                </option>
-              ))}
-            </select>
+          <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_1fr]">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted pl-1">Difficulty</span>
+              <select
+                value={draft.difficulty}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    difficulty: event.target.value as RecipeDraft["difficulty"],
+                  }))
+                }
+                aria-label="Difficulty"
+              >
+                {DIFFICULTIES.map((difficulty) => (
+                  <option key={difficulty} value={difficulty}>
+                    {difficulty}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/60 px-4">
               <input
                 className="h-4 w-4"
@@ -337,19 +348,18 @@ export function RecipesView() {
               />
               High protein
             </label>
+            <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/60 px-4">
+              <input
+                className="h-4 w-4"
+                type="checkbox"
+                checked={draft.budgetFriendly}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, budgetFriendly: event.target.checked }))
+                }
+              />
+              Budget friendly
+            </label>
           </div>
-
-          <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/60 px-4 py-3">
-            <input
-              className="h-4 w-4"
-              type="checkbox"
-              checked={draft.budgetFriendly}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, budgetFriendly: event.target.checked }))
-              }
-            />
-            Budget friendly
-          </label>
 
           <input
             value={draft.tags.join(", ")}
