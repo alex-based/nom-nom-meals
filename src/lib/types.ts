@@ -1,4 +1,5 @@
 export type MealSlot = "Breakfast" | "Lunch" | "Dinner";
+<<<<<<< HEAD
 
 export type Difficulty = "Easy" | "Medium" | "Hard";
 
@@ -14,15 +15,26 @@ export type IngredientCategory = {
 };
 
 export type RecipeIngredient = {
+=======
+export type Difficulty = "Easy" | "Medium" | "Hard";
+
+export interface Ingredient {
+>>>>>>> 520c3923171ed8b3e5ebd04451e0d31eddb3de94
   id: string;
   name: string;
   quantity: number;
   unit: string;
   categoryId: string;
   note: string;
+<<<<<<< HEAD
 };
 
 export type Recipe = {
+=======
+}
+
+export interface Recipe {
+>>>>>>> 520c3923171ed8b3e5ebd04451e0d31eddb3de94
   id: string;
   title: string;
   mealType: MealSlot;
@@ -37,6 +49,7 @@ export type Recipe = {
   tags: string[];
   comments: string;
   instructions: string;
+<<<<<<< HEAD
   archived: boolean;
   ingredients: RecipeIngredient[];
 };
@@ -74,10 +87,44 @@ export type PantryItem = {
   id: string;
   name: string;
   normalizedName: string;
+=======
+  ingredients: Ingredient[];
+  archived: boolean;
+}
+
+/** Mutable draft used in the recipe form. Includes optional id for edits. */
+export type RecipeDraft = Omit<Recipe, "id" | "archived"> & { id?: string };
+
+export interface Category {
+  id: string;
+  name: string;
+}
+
+export interface WeekEntry {
+  id: string;
+  slot: MealSlot;
+  dayIndex: number;
+  recipeId: string | null;
+  servings: number;
+  cooked: boolean;
+  notes: string;
+}
+
+export interface FullWeekPlan {
+  isoYear: number;
+  isoWeek: number;
+  entries: WeekEntry[];
+}
+
+export interface PantryItem {
+  id: string;
+  name: string;
+>>>>>>> 520c3923171ed8b3e5ebd04451e0d31eddb3de94
   quantity: number;
   unit: string;
   categoryId: string;
   updatedAt: string;
+<<<<<<< HEAD
 };
 
 export type InventoryTransaction = {
@@ -116,3 +163,29 @@ export type ShoppingListItem = {
 export type RecipeDraft = Omit<Recipe, "id" | "archived"> & {
   id?: string;
 };
+=======
+}
+
+export interface InventoryTransaction {
+  id: string;
+  itemName: string;
+  quantity: number;
+  unit: string;
+  type: string;
+  note: string;
+  createdAt: string;
+}
+
+export interface ShoppingItem {
+  id: string;
+  name: string;
+  unit: string;
+  categoryId: string;
+  needed: number;
+  pantryQuantity: number;
+  toBuy: number;
+  bought: boolean;
+  note: string;
+  source: "recipe" | "manual";
+}
+>>>>>>> 520c3923171ed8b3e5ebd04451e0d31eddb3de94
