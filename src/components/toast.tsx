@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+
+const TOAST_DURATION_MS = 4000;
 
 type ToastVariant = "success" | "error" | "info";
 
@@ -25,13 +27,25 @@ export function useToast() {
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const counterRef = useRef(0);
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Clean up all timers on unmount
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
 
   const toast = useCallback((message: string, variant: ToastVariant = "success") => {
     const id = `toast-${++counterRef.current}`;
     setItems((prev) => [...prev, { id, message, variant }]);
-    setTimeout(() => {
+
+    const timer = setTimeout(() => {
       setItems((prev) => prev.filter((item) => item.id !== id));
-    }, 4000);
+      timersRef.current.delete(id);
+    }, TOAST_DURATION_MS);
+
+    timersRef.current.set(id, timer);
   }, []);
 
   return (
@@ -48,9 +62,9 @@ const variantStyles: Record<ToastVariant, string> = {
   info: "bg-[#1f1811] text-white",
 };
 
+// Container is always in the DOM so the aria-live region is stable;
+// screen readers only announce changes to a region that already exists.
 function ToastContainer({ items }: { items: ToastItem[] }) {
-  if (items.length === 0) return null;
-
   return (
     <div
       aria-live="polite"
@@ -60,7 +74,6 @@ function ToastContainer({ items }: { items: ToastItem[] }) {
       {items.map((item) => (
         <div
           key={item.id}
-          role="status"
           className={`pointer-events-auto rounded-2xl px-5 py-3 text-sm font-semibold shadow-lg ${variantStyles[item.variant]}`}
         >
           {item.message}
