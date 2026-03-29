@@ -8,6 +8,7 @@ import { DIFFICULTIES, MEAL_SLOTS, UNIT_OPTIONS } from "@/lib/constants";
 import { createId } from "@/lib/planner";
 import { Recipe, RecipeDraft } from "@/lib/types";
 import type { ParseResult } from "@/lib/recipe-parser";
+import { parseRecipeFromHtml } from "@/lib/recipe-parser";
 
 function emptyDraft(): RecipeDraft {
   return {
@@ -54,6 +55,8 @@ export function RecipesView() {
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteHtml, setPasteHtml] = useState("");
 
   const deferredSearch = useDeferredValue(search);
 
@@ -142,6 +145,30 @@ export function RecipesView() {
     } finally {
       setImporting(false);
     }
+  };
+
+  const parseFromPastedHtml = () => {
+    const html = pasteHtml.trim();
+    if (!html) return;
+    const result = parseRecipeFromHtml(html);
+    startTransition(() => {
+      setSelectedRecipeId(null);
+      setDraft({
+        ...result.draft,
+        ingredients: result.draft.ingredients.map((ing) => ({
+          ...ing,
+          id: createId("ingredient"),
+        })),
+      });
+      setPasteHtml("");
+      setPasteOpen(false);
+    });
+    toast(
+      result.richData
+        ? "Recipe parsed — review and save."
+        : "No structured data found in the pasted HTML — please fill in the details.",
+      result.richData ? "success" : "info",
+    );
   };
 
   return (
@@ -276,6 +303,43 @@ export function RecipesView() {
           >
             {importing ? "Importing…" : "Import"}
           </button>
+        </div>
+
+        <div className="mt-2">
+          <button
+            type="button"
+            className="text-xs text-muted underline-offset-2 hover:underline"
+            onClick={() => setPasteOpen((v) => !v)}
+            aria-expanded={pasteOpen}
+          >
+            {pasteOpen ? "Hide" : "Site blocked? Paste page source instead"}
+          </button>
+          {pasteOpen && (
+            <div className="mt-2 space-y-2">
+              <p className="text-xs section-subtitle">
+                Open the recipe page in your browser, press{" "}
+                <kbd className="rounded border border-line px-1 font-mono text-xs">Ctrl+U</kbd>{" "}
+                (or <kbd className="rounded border border-line px-1 font-mono text-xs">⌘+U</kbd>),
+                select all, copy, and paste below.
+              </p>
+              <textarea
+                value={pasteHtml}
+                placeholder="Paste raw page HTML here…"
+                onChange={(event) => setPasteHtml(event.target.value)}
+                aria-label="Paste raw HTML of recipe page"
+                rows={5}
+                className="font-mono text-xs"
+              />
+              <button
+                type="button"
+                className="rounded-2xl px-4 py-2 text-sm font-semibold button-secondary disabled:opacity-50"
+                onClick={parseFromPastedHtml}
+                disabled={!pasteHtml.trim()}
+              >
+                Parse HTML
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="mt-5 space-y-5">

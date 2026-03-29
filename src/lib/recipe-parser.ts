@@ -1,18 +1,24 @@
 /**
- * Recipe parser: extracts a RecipeDraft from raw HTML fetched from a recipe URL.
+ * Recipe parser: extracts a RecipeDraft from raw HTML fetched from a recipe URL
+ * or pasted directly from a browser's View Source.
  *
- * Strategy (in order of preference):
- *  1. JSON-LD with @type "Recipe" (schema.org) — most reliable, widely supported.
- *  2. HTML microdata (itemprop attributes) — used by many European recipe blogs
- *     that don't emit JSON-LD (e.g. aniagotuje.pl).
- *  3. OpenGraph / <meta> / <title> as a last-resort title fallback.
+ * Parsing strategies (tried in order):
+ *  1. JSON-LD   — schema.org/Recipe in <script type="application/ld+json">
+ *  2. Microdata — itemprop attributes on HTML elements
+ *  3. WP Recipe Maker (WPRM) — CSS class-based extraction for the most popular
+ *     WordPress recipe plugin (used by thousands of food blogs)
+ *  4. Title-only fallback — OpenGraph / <title> tag
  *
- * All inference is pure (no network calls). The route handler is responsible for
- * fetching the HTML and passing it here.
+ * Ingredient strings (from strategies 1–2) are parsed by the `parse-ingredient`
+ * npm library, which handles fractions, mixed numbers, ranges, and a wide unit
+ * vocabulary far more robustly than a hand-rolled regex.
+ *
+ * All logic is pure — no network calls. The route handler and the client-side
+ * paste path are both responsible for supplying the raw HTML.
  */
 
+import { parseIngredient as libParseIngredient } from "parse-ingredient";
 import type { Difficulty, Ingredient, MealSlot, RecipeDraft } from "./types";
-import { UNIT_OPTIONS } from "./constants";
 import { createId } from "./planner";
 
 // ---------------------------------------------------------------------------
@@ -21,47 +27,38 @@ import { createId } from "./planner";
 
 export interface ParseResult {
   draft: RecipeDraft;
-  /** True when a schema.org/Recipe JSON-LD block was found. */
+  /** True when structured recipe data (JSON-LD, microdata, or WPRM) was found. */
   richData: boolean;
 }
 
 export function parseRecipeFromHtml(html: string): ParseResult {
   // Strategy 1: JSON-LD
   const jsonLd = extractJsonLd(html);
-  if (jsonLd) {
-    return { draft: draftFromJsonLd(jsonLd), richData: true };
-  }
+  if (jsonLd) return { draft: draftFromSchemaRecipe(jsonLd), richData: true };
 
-  // Strategy 2: HTML microdata (itemprop)
+  // Strategy 2: HTML microdata (itemprop / itemscope)
   const microdata = extractMicrodata(html);
-  if (microdata) {
-    return { draft: draftFromJsonLd(microdata), richData: true };
-  }
+  if (microdata) return { draft: draftFromSchemaRecipe(microdata), richData: true };
 
-  // Strategy 3: bare-minimum fallback — at least populate the title.
+  // Strategy 3: WP Recipe Maker CSS classes
+  const wprm = extractWprm(html);
+  if (wprm) return { draft: wprm, richData: true };
+
+  // Strategy 4: bare-minimum — title only
   const title = extractMetaTitle(html) ?? "";
-  return {
-    draft: emptyDraftWithTitle(title),
-    richData: false,
-  };
+  return { draft: emptyDraftWithTitle(title), richData: false };
 }
 
 // ---------------------------------------------------------------------------
-// JSON-LD extraction
+// Strategy 1: JSON-LD
 // ---------------------------------------------------------------------------
 
-/**
- * Returns the first schema.org/Recipe object found in any JSON-LD script block,
- * handling both top-level objects and @graph arrays.
- */
 function extractJsonLd(html: string): SchemaRecipe | null {
   const scriptRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let match: RegExpExecArray | null;
-
   while ((match = scriptRe.exec(html)) !== null) {
     try {
-      const data = JSON.parse(match[1].trim()) as unknown;
-      const found = findRecipeNode(data);
+      const found = findRecipeNode(JSON.parse(match[1].trim()) as unknown);
       if (found) return found;
     } catch {
       // Malformed JSON-LD — skip.
@@ -72,13 +69,8 @@ function extractJsonLd(html: string): SchemaRecipe | null {
 
 function findRecipeNode(data: unknown): SchemaRecipe | null {
   if (!data || typeof data !== "object") return null;
-
   const obj = data as Record<string, unknown>;
-
-  // Direct Recipe object.
   if (isRecipeType(obj["@type"])) return obj as SchemaRecipe;
-
-  // @graph array (common on WordPress-based recipe sites).
   if (Array.isArray(obj["@graph"])) {
     for (const node of obj["@graph"]) {
       const found = findRecipeNode(node);
@@ -95,44 +87,27 @@ function isRecipeType(value: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// HTML microdata extraction (itemprop / itemscope)
+// Strategy 2: HTML microdata (itemprop / itemscope)
 // ---------------------------------------------------------------------------
 
-/**
- * Extracts schema.org/Recipe data from HTML microdata attributes.
- * Returns a SchemaRecipe-shaped object so it can be fed into draftFromJsonLd.
- *
- * Handles patterns like:
- *   <span itemprop="name">Babka budyniowa</span>
- *   <li itemprop="recipeIngredient">2 jajka</li>
- *   <meta itemprop="prepTime" content="PT20M">
- *   <span itemprop="recipeYield">8</span>
- */
 function extractMicrodata(html: string): SchemaRecipe | null {
-  // Only proceed if the page actually contains recipe microdata.
   if (!/itemtype=["'][^"']*schema\.org\/Recipe["']/i.test(html)) return null;
 
   function getItemprop(prop: string): string | null {
-    // <meta itemprop="X" content="Y"> — used for machine-readable values
     const metaRe = new RegExp(
-      `<meta[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`,
-      "i",
+      `<meta[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`, "i",
     );
     const metaMatch = metaRe.exec(html);
     if (metaMatch) return metaMatch[1].trim();
 
-    // <X itemprop="Y" content="Z"> — datetime / link elements
     const contentRe = new RegExp(
-      `<[a-z]+[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`,
-      "i",
+      `<[a-z]+[^>]+itemprop=["']${prop}["'][^>]+content=["']([^"']*)["']`, "i",
     );
     const contentMatch = contentRe.exec(html);
     if (contentMatch) return contentMatch[1].trim();
 
-    // <X itemprop="Y">text</X>
     const textRe = new RegExp(
-      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`,
-      "i",
+      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`, "i",
     );
     const textMatch = textRe.exec(html);
     if (textMatch) return stripTags(textMatch[1]).trim();
@@ -143,8 +118,7 @@ function extractMicrodata(html: string): SchemaRecipe | null {
   function getAllItemprop(prop: string): string[] {
     const results: string[] = [];
     const re = new RegExp(
-      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`,
-      "gi",
+      `<[a-z][^>]+itemprop=["']${prop}["'][^>]*>([\\s\\S]*?)<\\/[a-z]`, "gi",
     );
     let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
@@ -155,11 +129,9 @@ function extractMicrodata(html: string): SchemaRecipe | null {
   }
 
   const name = getItemprop("name");
-  if (!name) return null; // Not enough data.
+  if (!name) return null;
 
-  // Nutrition calories may be nested: itemprop="calories" inside itemprop="nutrition"
   const caloriesRaw = getItemprop("calories");
-  const nutrition = caloriesRaw ? { calories: caloriesRaw } : undefined;
 
   return {
     name,
@@ -168,36 +140,183 @@ function extractMicrodata(html: string): SchemaRecipe | null {
     totalTime: getItemprop("totalTime") ?? undefined,
     recipeYield: getItemprop("recipeYield") ?? undefined,
     recipeIngredient: getAllItemprop("recipeIngredient"),
-    recipeInstructions: getAllItemprop("recipeInstructions").join("\n") || getItemprop("recipeInstructions") || undefined,
+    recipeInstructions:
+      getAllItemprop("recipeInstructions").join("\n") ||
+      getItemprop("recipeInstructions") ||
+      undefined,
     recipeCategory: getItemprop("recipeCategory") ?? undefined,
     keywords: getItemprop("keywords") ?? undefined,
     description: getItemprop("description") ?? undefined,
-    nutrition,
+    nutrition: caloriesRaw ? { calories: caloriesRaw } : undefined,
   };
 }
 
-function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s{2,}/g, " ").trim();
+// ---------------------------------------------------------------------------
+// Strategy 3: WP Recipe Maker (WPRM)
+// ---------------------------------------------------------------------------
+
+/**
+ * WP Recipe Maker is the most-used WordPress recipe plugin. It renders a
+ * dedicated recipe card with predictable CSS class names, even when the
+ * page's JSON-LD / microdata is absent or incomplete.
+ *
+ * Class naming convention: wprm-recipe-{field}
+ * Timing: separate number + unit elements, e.g.
+ *   <span class="wprm-recipe-prep_time">15</span>
+ *   <span class="wprm-recipe-prep_time-unit-container">minutes</span>
+ *
+ * Ingredients are pre-split into amount / unit / name / notes spans,
+ * so we construct Ingredient objects directly without re-parsing strings.
+ */
+function extractWprm(html: string): RecipeDraft | null {
+  if (!/wprm-recipe\b/i.test(html)) return null;
+
+  /** Returns text content of the first element matching the CSS class. */
+  function getField(cls: string): string | null {
+    const re = new RegExp(
+      `<[^>]+class="[^"]*\\b${cls}\\b[^"]*"[^>]*>([\\s\\S]*?)<\\/`,
+      "i",
+    );
+    const m = re.exec(html);
+    return m ? stripTags(m[1]).trim() : null;
+  }
+
+  /** Returns text content of all elements matching the CSS class. */
+  function getAllFields(cls: string): string[] {
+    const results: string[] = [];
+    const re = new RegExp(
+      `<[^>]+class="[^"]*\\b${cls}\\b[^"]*"[^>]*>([\\s\\S]*?)<\\/`,
+      "gi",
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const text = stripTags(m[1]).trim();
+      if (text) results.push(text);
+    }
+    return results;
+  }
+
+  const title = getField("wprm-recipe-name");
+  if (!title) return null;
+
+  // ---- Timing ----
+  function wprmMinutes(type: string): number {
+    const numStr = getField(`wprm-recipe-${type}_time-minutes`) ?? getField(`wprm-recipe-${type}_time`);
+    if (!numStr) return 0;
+    const n = parseInt(numStr, 10);
+    if (isNaN(n)) return 0;
+    const unitRaw = (
+      getField(`wprm-recipe-${type}_time-unit-container`) ??
+      getField(`wprm-recipe-${type}_time-unit`)
+    )?.toLowerCase() ?? "minutes";
+    return /hour/.test(unitRaw) ? n * 60 : n;
+  }
+
+  const prepTimeMinutes = wprmMinutes("prep");
+  const cookTimeMinutes = wprmMinutes("cook");
+
+  // ---- Servings ----
+  const servingsStr =
+    getField("wprm-recipe-servings-with-unit") ??
+    getField("wprm-recipe-servings");
+  const baseServings = servingsStr ? (parseInt(servingsStr, 10) || 2) : 2;
+
+  // ---- Calories ----
+  const caloriesStr = getField("wprm-recipe-calories");
+  const caloriesPerServing = caloriesStr ? (parseInt(caloriesStr, 10) || 0) : 0;
+
+  // ---- Ingredients ----
+  // WPRM renders each ingredient as a <li> with sub-spans for amount/unit/name/notes.
+  const ingredients: Ingredient[] = [];
+  const liRe = /<li[^>]+class="[^"]*\bwprm-recipe-ingredient\b[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+  let liMatch: RegExpExecArray | null;
+  while ((liMatch = liRe.exec(html)) !== null) {
+    const block = liMatch[1];
+
+    function subField(cls: string): string {
+      const re = new RegExp(
+        `<[^>]+class="[^"]*\\b${cls}\\b[^"]*"[^>]*>([\\s\\S]*?)<\\/`,
+        "i",
+      );
+      const m = re.exec(block);
+      return m ? stripTags(m[1]).trim() : "";
+    }
+
+    const amount = subField("wprm-recipe-ingredient-amount");
+    const unitStr = subField("wprm-recipe-ingredient-unit");
+    const name = subField("wprm-recipe-ingredient-name");
+    const notes = subField("wprm-recipe-ingredient-notes");
+
+    if (!name) continue;
+
+    // Reconstruct a string and run through the standard parser so unit
+    // normalisation and category inference apply uniformly.
+    const ingredientStr = [amount, unitStr, name, notes ? `, ${notes}` : ""]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+    ingredients.push(parseIngredientString(ingredientStr));
+  }
+
+  // ---- Instructions ----
+  const instructions = getAllFields("wprm-recipe-instruction-text").join("\n");
+
+  // ---- Tags / keywords ----
+  const rawTags = getAllFields("wprm-recipe-keyword");
+  const tags = [...new Set(
+    rawTags
+      .flatMap((t) => t.split(/[,;]/))
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0 && t.length < 30),
+  )].slice(0, 8);
+
+  // ---- Description ----
+  const comments = getField("wprm-recipe-summary") ?? getField("wprm-recipe-description") ?? "";
+
+  // ---- Meal type / dietary / difficulty ----
+  const mealType = inferMealType(undefined, tags.join(","), title);
+  const { vegetarian, highProtein, budgetFriendly } = inferDietaryFlags(ingredients);
+  const difficulty = inferDifficulty(prepTimeMinutes + cookTimeMinutes, ingredients.length);
+
+  return {
+    title,
+    mealType,
+    baseServings,
+    prepTimeMinutes,
+    cookTimeMinutes,
+    caloriesPerServing,
+    difficulty,
+    vegetarian,
+    highProtein,
+    budgetFriendly,
+    tags,
+    comments,
+    instructions,
+    ingredients,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// JSON-LD → RecipeDraft
+// SchemaRecipe → RecipeDraft
 // ---------------------------------------------------------------------------
 
-function draftFromJsonLd(schema: SchemaRecipe): RecipeDraft {
+function draftFromSchemaRecipe(schema: SchemaRecipe): RecipeDraft {
   const title = asString(schema.name) ?? "";
   const prepTimeMinutes = parseDuration(asString(schema.prepTime));
-  const cookTimeMinutes = parseDuration(asString(schema.cookTime)) ||
-    parseDuration(asString(schema.totalTime)) - prepTimeMinutes || 0;
+  const cookTimeMinutes =
+    parseDuration(asString(schema.cookTime)) ||
+    Math.max(0, parseDuration(asString(schema.totalTime)) - prepTimeMinutes);
   const baseServings = parseServings(schema.recipeYield);
   const instructions = parseInstructions(schema.recipeInstructions);
-  const rawIngredients = (schema.recipeIngredient ?? []).map(asString).filter(Boolean) as string[];
+  const rawIngredients = (schema.recipeIngredient ?? [])
+    .map(asString)
+    .filter(Boolean) as string[];
   const ingredients = rawIngredients.map(parseIngredientString);
   const caloriesPerServing = parseCalories(schema.nutrition);
   const mealType = inferMealType(schema.recipeCategory, schema.keywords, title);
   const { vegetarian, highProtein, budgetFriendly } = inferDietaryFlags(ingredients);
-  const totalMinutes = prepTimeMinutes + cookTimeMinutes;
-  const difficulty = inferDifficulty(totalMinutes, ingredients.length);
+  const difficulty = inferDifficulty(prepTimeMinutes + cookTimeMinutes, ingredients.length);
   const tags = extractTags(schema.keywords, schema.recipeCategory);
   const comments = asString(schema.description) ?? "";
 
@@ -220,183 +339,94 @@ function draftFromJsonLd(schema: SchemaRecipe): RecipeDraft {
 }
 
 // ---------------------------------------------------------------------------
-// Duration (ISO 8601 PT…) → minutes
-// ---------------------------------------------------------------------------
-
-function parseDuration(value: string | null | undefined): number {
-  if (!value) return 0;
-  // e.g. PT1H30M, PT45M, P0DT1H
-  const hours = /(\d+(?:\.\d+)?)\s*H/i.exec(value)?.[1] ?? "0";
-  const minutes = /(\d+(?:\.\d+)?)\s*M/i.exec(value)?.[1] ?? "0";
-  return Math.round(parseFloat(hours) * 60 + parseFloat(minutes));
-}
-
-// ---------------------------------------------------------------------------
-// Servings
-// ---------------------------------------------------------------------------
-
-function parseServings(value: unknown): number {
-  if (Array.isArray(value)) {
-    const first = value[0];
-    return parseServings(first);
-  }
-  if (typeof value === "number") return Math.max(1, value);
-  if (typeof value === "string") {
-    const n = parseInt(value, 10);
-    return isNaN(n) ? 2 : Math.max(1, n);
-  }
-  return 2;
-}
-
-// ---------------------------------------------------------------------------
-// Ingredient string → Ingredient
+// Ingredient string → Ingredient  (powered by parse-ingredient)
 // ---------------------------------------------------------------------------
 
 /**
+ * Maps parse-ingredient's unitOfMeasureID to the app's UNIT_OPTIONS.
+ * Size descriptors ("large", "medium", "small") that the library sometimes
+ * picks up as units are normalised to "pcs".
+ */
+const UNIT_ID_MAP: Record<string, string> = {
+  cup: "cup",
+  tablespoon: "tbsp",
+  teaspoon: "tsp",
+  gram: "g",
+  kilogram: "kg",
+  milliliter: "ml",
+  liter: "l",
+  ounce: "oz",
+  pound: "lb",
+  bunch: "bunch",
+  slice: "slice",
+  can: "can",
+  jar: "jar",
+  bag: "bag",
+  piece: "pcs",
+  // Count-style units → pcs
+  clove: "pcs",
+  head: "pcs",
+  sprig: "pcs",
+  ear: "pcs",
+  stick: "pcs",
+  box: "pcs",
+  package: "pcs",
+  pack: "pcs",
+  carton: "pcs",
+  container: "pcs",
+  dozen: "pcs",
+};
+
+const SIZE_DESCRIPTORS = new Set(["large", "medium", "small", "extra-large", "xl"]);
+
+function mapUnit(unitId: string | null | undefined): string {
+  if (!unitId) return "pcs";
+  const lower = unitId.toLowerCase();
+  if (SIZE_DESCRIPTORS.has(lower)) return "pcs";
+  return UNIT_ID_MAP[lower] ?? "pcs";
+}
+
+/**
  * Parses a natural-language ingredient string into a structured Ingredient.
+ * Uses the `parse-ingredient` library for quantity/unit extraction, which
+ * handles fractions (½, 1/2, 1 1/2), ranges (2–3), and a wide unit vocabulary
+ * across English and metric systems.
  *
- * Examples handled:
- *   "2 cups all-purpose flour"
- *   "1/2 cup butter, softened"
- *   "1 1/2 teaspoons baking powder"
- *   "3 large eggs"
- *   "Salt and pepper to taste"
- *   "500g chicken breast"
+ * For non-English strings (e.g. Polish) where the library finds no unit,
+ * the full string becomes the name with quantity 1 and unit "pcs" — the user
+ * can adjust before saving.
  */
 export function parseIngredientString(raw: string): Ingredient {
-  const text = raw.trim();
+  const trimmed = raw.trim();
+  const [result] = libParseIngredient(trimmed);
 
-  // Strip leading Unicode fractions / HTML entities.
-  const normalized = normalizeUnicodeFractions(text);
-
-  // Quantity patterns: "1 1/2", "1/2", "½", "2", "2.5", "2-3" (range → first)
-  const qtyRe =
-    /^(\d+(?:\.\d+)?)\s+(\d+\/\d+)|^(\d+\/\d+)|^(\d+(?:\.\d+)?)(?:\s*[-–]\s*\d+(?:\.\d+)?)?/;
-
-  let quantity = 1;
-  let remainder = normalized;
-
-  const qtyMatch = qtyRe.exec(normalized);
-  if (qtyMatch) {
-    if (qtyMatch[1] && qtyMatch[2]) {
-      // "1 1/2" style
-      quantity = parseFloat(qtyMatch[1]) + evalFraction(qtyMatch[2]);
-    } else if (qtyMatch[3]) {
-      // pure fraction
-      quantity = evalFraction(qtyMatch[3]);
-    } else if (qtyMatch[4]) {
-      quantity = parseFloat(qtyMatch[4]);
-    }
-    remainder = normalized.slice(qtyMatch[0].length).trim();
+  if (!result || result.isGroupHeader) {
+    return {
+      id: createId("ingredient"),
+      name: trimmed,
+      quantity: 1,
+      unit: "pcs",
+      categoryId: inferCategory(trimmed),
+      note: "",
+    };
   }
 
-  // Try to match a known unit next.
-  const { unit, rest } = extractUnit(remainder);
+  const unit = mapUnit(result.unitOfMeasureID);
 
-  // Clean up the ingredient name: strip preparation notes after comma.
-  const commaIdx = rest.indexOf(",");
-  const nameRaw = commaIdx > 0 ? rest.slice(0, commaIdx) : rest;
-  const note = commaIdx > 0 ? rest.slice(commaIdx + 1).trim() : "";
-
-  // Strip size descriptors ("large", "medium", "small", "fresh", "chopped", etc.)
-  const name = cleanIngredientName(nameRaw).trim() || rest.trim();
-
-  const categoryId = inferCategory(name);
+  // Split description on first comma: "olive oil, divided" → name + note.
+  const desc = result.description.trim();
+  const commaIdx = desc.indexOf(",");
+  const name = (commaIdx > 0 ? desc.slice(0, commaIdx) : desc).trim() || trimmed;
+  const note = commaIdx > 0 ? desc.slice(commaIdx + 1).trim() : "";
 
   return {
     id: createId("ingredient"),
     name,
-    quantity: quantity || 1,
+    quantity: result.quantity ?? 1,
     unit,
-    categoryId,
+    categoryId: inferCategory(name),
     note,
   };
-}
-
-function normalizeUnicodeFractions(text: string): string {
-  return text
-    .replace(/\u00bc/g, "1/4")
-    .replace(/\u00bd/g, "1/2")
-    .replace(/\u00be/g, "3/4")
-    .replace(/\u2153/g, "1/3")
-    .replace(/\u2154/g, "2/3")
-    .replace(/\u215b/g, "1/8")
-    .replace(/\u215c/g, "3/8")
-    .replace(/\u215d/g, "5/8")
-    .replace(/\u215e/g, "7/8");
-}
-
-function evalFraction(frac: string): number {
-  const parts = frac.split("/");
-  if (parts.length !== 2) return 1;
-  const num = parseFloat(parts[0]);
-  const den = parseFloat(parts[1]);
-  return den !== 0 ? num / den : 1;
-}
-
-/**
- * Matches the first word(s) of `text` against a comprehensive unit table.
- * Returns the canonical unit and the remaining string.
- */
-function extractUnit(text: string): { unit: string; rest: string } {
-  // Map from pattern → canonical unit (canonical units come from UNIT_OPTIONS).
-  const unitMap: Array<[RegExp, string]> = [
-    [/^kilograms?\b/i, "kg"],
-    [/^kg\b/i, "kg"],
-    [/^grams?\b/i, "g"],
-    [/^gr?\b/i, "g"],
-    [/^liters?\b/i, "l"],
-    [/^litres?\b/i, "l"],
-    [/^ltr?\b/i, "l"],
-    [/^milliliters?\b/i, "ml"],
-    [/^millilitres?\b/i, "ml"],
-    [/^ml\b/i, "ml"],
-    [/^tablespoons?\b/i, "tbsp"],
-    [/^tbsp?\b/i, "tbsp"],
-    [/^teaspoons?\b/i, "tsp"],
-    [/^tsps?\b/i, "tsp"],
-    [/^cups?\b/i, "cup"],
-    [/^ounces?\b/i, "oz"],
-    [/^oz\b/i, "oz"],
-    [/^pounds?\b/i, "lb"],
-    [/^lbs?\b/i, "lb"],
-    [/^bunches?\b/i, "bunch"],
-    [/^slices?\b/i, "slice"],
-    [/^cans?\b/i, "can"],
-    [/^jars?\b/i, "jar"],
-    [/^bags?\b/i, "bag"],
-    [/^pieces?\b/i, "pcs"],
-    [/^pcs?\b/i, "pcs"],
-    [/^cloves?\b/i, "pcs"],
-    [/^heads?\b/i, "pcs"],
-    [/^stalks?\b/i, "pcs"],
-  ];
-
-  for (const [pattern, canonical] of unitMap) {
-    const m = pattern.exec(text);
-    if (m) {
-      // Verify canonical is in UNIT_OPTIONS (or fall through to "pcs").
-      const unit = UNIT_OPTIONS.includes(canonical) ? canonical : "pcs";
-      return { unit, rest: text.slice(m[0].length).trim() };
-    }
-  }
-
-  // Units sometimes appear with no space after a number: "500g chicken"
-  const stickyRe = /^(\d+(?:\.\d+)?)\s*(g|kg|ml|l|oz|lb)\s+/i.exec(text);
-  if (stickyRe) {
-    const unit = stickyRe[2].toLowerCase() as string;
-    const canonUnit = UNIT_OPTIONS.includes(unit) ? unit : "pcs";
-    return { unit: canonUnit, rest: text.slice(stickyRe[0].length).trim() };
-  }
-
-  return { unit: "pcs", rest: text };
-}
-
-const DESCRIPTOR_RE =
-  /\b(large|medium|small|extra[-\s]large|xl|fresh|frozen|dried|whole|boneless|skinless|chopped|diced|sliced|minced|grated|shredded|peeled|halved|quartered|crushed|ground|cooked|uncooked|raw|ripe|firm|soft|heaping|packed|scant|level|flat|rounded|optional|approximately|about|to taste|as needed|or more|or less)\b/gi;
-
-function cleanIngredientName(text: string): string {
-  return text.replace(DESCRIPTOR_RE, "").replace(/\s{2,}/g, " ").trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -420,10 +450,6 @@ const CATEGORY_RULES: Array<{ id: string; keywords: RegExp }> = [
       /\b(tomato|onion|garlic|carrot|potato|sweet\s+potato|pepper|capsicum|spinach|lettuce|kale|arugula|rocket|broccoli|cauliflower|cabbage|brussels|zucchini|courgette|eggplant|aubergine|cucumber|celery|asparagus|artichoke|beet|beetroot|parsnip|turnip|radish|leek|scallion|spring\s+onion|shallot|chive|mushroom|corn|pea|edamame|bok\s+choy|chard|collard|rapini|apple|banana|lemon|lime|orange|grapefruit|avocado|mango|pineapple|strawberr|raspberr|blueberr|blackberr|cherry|grape|peach|plum|apricot|fig|date|kiwi|papaya|pomegranate|cranberr|herb|basil|parsley|cilantro|coriander|thyme|rosemary|sage|dill|mint|oregano|tarragon|chervil|bay\s+leaf|lemongrass|ginger|turmeric\s+root)\b/i,
   },
   {
-    id: "dairy",
-    keywords: /\b(egg)\b/i,
-  },
-  {
     id: "bakery",
     keywords:
       /\b(bread|flour|yeast|sourdough|roll|baguette|tortilla|pita|naan|chapati|cracker|biscuit|croissant|bagel|muffin|scone|brioche|focaccia|ciabatta|pumpernickel|rye\s+bread|whole\s+wheat\s+bread)\b/i,
@@ -440,7 +466,7 @@ const CATEGORY_RULES: Array<{ id: string; keywords: RegExp }> = [
   {
     id: "pantry",
     keywords:
-      /\b(oil|olive\s+oil|vegetable\s+oil|canola|sesame\s+oil|vinegar|balsamic|salt|pepper|sugar|brown\s+sugar|honey|maple\s+syrup|agave|molasses|soy\s+sauce|tamari|fish\s+sauce|worcestershire|hot\s+sauce|sriracha|tabasco|ketchup|mustard|mayonnaise|mayo|pasta|noodle|spaghetti|fettuccine|penne|rigatoni|linguine|orzo|rice|quinoa|couscous|bulgur|farro|millet|oat|granola|lentil|chickpea|bean|kidney\s+bean|black\s+bean|cannellini|lentil|split\s+pea|peanut\s+butter|almond\s+butter|tahini|jam|jelly|marmalade|chocolate|cocoa|vanilla|baking\s+powder|baking\s+soda|cornstarch|corn\s+flour|bread\s+crumb|panko|nut|almond|cashew|walnut|pecan|pistachio|pine\s+nut|seed|sesame|sunflower\s+seed|pumpkin\s+seed|flaxseed|chia\s+seed|spice|cumin|coriander\s+powder|paprika|cinnamon|turmeric|cardamom|clove|nutmeg|allspice|star\s+anise|fennel\s+seed|chili|cayenne|curry\s+powder|garam\s+masala|za.?atar|sumac|dried\s+herb|tomato\s+paste|tomato\s+sauce|canned|tinned|diced\s+tomato|passata|coconut\s+milk|curry\s+paste|miso|tahini|capers|olive|pickle|sun[-\s]dried|anchovy\s+paste|gelatin|agar)\b/i,
+      /\b(oil|olive\s+oil|vegetable\s+oil|canola|sesame\s+oil|vinegar|balsamic|salt|pepper|sugar|brown\s+sugar|honey|maple\s+syrup|agave|molasses|soy\s+sauce|tamari|fish\s+sauce|worcestershire|hot\s+sauce|sriracha|tabasco|ketchup|mustard|mayonnaise|mayo|pasta|noodle|spaghetti|fettuccine|penne|rigatoni|linguine|orzo|rice|quinoa|couscous|bulgur|farro|millet|oat|granola|lentil|chickpea|bean|kidney\s+bean|black\s+bean|cannellini|split\s+pea|peanut\s+butter|almond\s+butter|tahini|jam|jelly|marmalade|chocolate|cocoa|vanilla|baking\s+powder|baking\s+soda|cornstarch|corn\s+flour|bread\s+crumb|panko|nut|almond|cashew|walnut|pecan|pistachio|pine\s+nut|seed|sesame|sunflower\s+seed|pumpkin\s+seed|flaxseed|chia\s+seed|spice|cumin|coriander\s+powder|paprika|cinnamon|turmeric|cardamom|clove|nutmeg|allspice|star\s+anise|fennel\s+seed|chili|cayenne|curry\s+powder|garam\s+masala|za.?atar|sumac|dried\s+herb|tomato\s+paste|tomato\s+sauce|canned|tinned|diced\s+tomato|passata|curry\s+paste|miso|capers|olive|pickle|sun[-\s]dried|anchovy\s+paste|gelatin|agar)\b/i,
   },
 ];
 
@@ -452,18 +478,37 @@ function inferCategory(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Duration (ISO 8601 PT…) → minutes
+// ---------------------------------------------------------------------------
+
+function parseDuration(value: string | null | undefined): number {
+  if (!value) return 0;
+  const hours = /(\d+(?:\.\d+)?)\s*H/i.exec(value)?.[1] ?? "0";
+  const minutes = /(\d+(?:\.\d+)?)\s*M/i.exec(value)?.[1] ?? "0";
+  return Math.round(parseFloat(hours) * 60 + parseFloat(minutes));
+}
+
+// ---------------------------------------------------------------------------
+// Servings
+// ---------------------------------------------------------------------------
+
+function parseServings(value: unknown): number {
+  if (Array.isArray(value)) return parseServings(value[0]);
+  if (typeof value === "number") return Math.max(1, value);
+  if (typeof value === "string") {
+    const n = parseInt(value, 10);
+    return isNaN(n) ? 2 : Math.max(1, n);
+  }
+  return 2;
+}
+
+// ---------------------------------------------------------------------------
 // Instructions
 // ---------------------------------------------------------------------------
 
-type SchemaInstructionStep = {
-  "@type"?: string;
-  text?: string;
-  name?: string;
-};
+type SchemaInstructionStep = { "@type"?: string; text?: string; name?: string };
 
-function parseInstructions(
-  instructions: SchemaRecipe["recipeInstructions"],
-): string {
+function parseInstructions(instructions: SchemaRecipe["recipeInstructions"]): string {
   if (!instructions) return "";
   if (typeof instructions === "string") return instructions.trim();
   if (Array.isArray(instructions)) {
@@ -498,25 +543,23 @@ function parseCalories(nutrition: SchemaRecipe["nutrition"]): number {
 // Meal type inference
 // ---------------------------------------------------------------------------
 
-function inferMealType(
-  category: unknown,
-  keywords: unknown,
-  title: string,
-): MealSlot {
-  const combined = [
-    ...(asStringArray(category)),
-    ...(asStringArray(keywords)),
-    title,
-  ]
+function inferMealType(category: unknown, keywords: unknown, title: string): MealSlot {
+  const combined = [...asStringArray(category), ...asStringArray(keywords), title]
     .join(" ")
     .toLowerCase();
 
-  if (/\b(breakfast|brunch|morning|oatmeal|pancake|waffle|french\s+toast|granola|smoothie\s+bowl|egg\s+benedict|frittata)\b/.test(combined)) {
+  if (
+    /\b(breakfast|brunch|morning|oatmeal|pancake|waffle|french\s+toast|granola|smoothie\s+bowl|egg\s+benedict|frittata)\b/.test(
+      combined,
+    )
+  )
     return "Breakfast";
-  }
-  if (/\b(lunch|salad|sandwich|wrap|soup|stew|chowder|bisque|gazpacho|light\s+meal|snack)\b/.test(combined)) {
+  if (
+    /\b(lunch|salad|sandwich|wrap|soup|stew|chowder|bisque|gazpacho|light\s+meal|snack)\b/.test(
+      combined,
+    )
+  )
     return "Lunch";
-  }
   return "Dinner";
 }
 
@@ -543,7 +586,7 @@ function inferDietaryFlags(ingredients: Ingredient[]): {
   let hasPremium = false;
 
   for (const ingredient of ingredients) {
-    const text = ingredient.name + " " + ingredient.note;
+    const text = `${ingredient.name} ${ingredient.note}`;
     if (MEAT_FISH_RE.test(text)) hasMeat = true;
     if (HIGH_PROTEIN_RE.test(text)) hasProtein = true;
     if (PREMIUM_RE.test(text)) hasPremium = true;
@@ -562,8 +605,8 @@ function inferDietaryFlags(ingredients: Ingredient[]): {
 
 function inferDifficulty(totalMinutes: number, ingredientCount: number): Difficulty {
   if (totalMinutes <= 30 && ingredientCount <= 8) return "Easy";
-  if (totalMinutes <= 60 && ingredientCount <= 15) return "Medium";
   if (totalMinutes <= 30 || ingredientCount <= 8) return "Easy";
+  if (totalMinutes <= 60 && ingredientCount <= 15) return "Medium";
   if (totalMinutes <= 60 || ingredientCount <= 15) return "Medium";
   return "Hard";
 }
@@ -577,8 +620,6 @@ function extractTags(keywords: unknown, category: unknown): string[] {
     .flatMap((s) => s.split(/[,;|]/))
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0 && s.length < 30);
-
-  // Deduplicate.
   return [...new Set(raw)].slice(0, 8);
 }
 
@@ -587,7 +628,8 @@ function extractTags(keywords: unknown, category: unknown): string[] {
 // ---------------------------------------------------------------------------
 
 function extractMetaTitle(html: string): string | null {
-  const og = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html);
+  const og =
+    /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html);
   if (og) return og[1];
   const title = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
   if (title) return title[1].trim();
@@ -595,8 +637,12 @@ function extractMetaTitle(html: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Shared utilities
 // ---------------------------------------------------------------------------
+
+function stripTags(html: string): string {
+  return html.replace(/<[^>]+>/g, " ").replace(/\s{2,}/g, " ").trim();
+}
 
 function asString(value: unknown): string | null {
   if (typeof value === "string") return value;
