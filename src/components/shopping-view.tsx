@@ -5,8 +5,8 @@ import { usePlanner } from "@/components/planner-provider";
 import { useToast } from "@/components/toast";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { UNIT_OPTIONS } from "@/lib/constants";
-import { formatRange, getWeekOptions } from "@/lib/date";
-import { formatQuantity, groupByCategory } from "@/lib/planner";
+import { formatRange, getDateForIsoWeek, getIsoWeekInfo, getWeekOptions } from "@/lib/date";
+import { formatQuantity, groupByCategory, roundToStandardSize } from "@/lib/planner";
 
 export function ShoppingView() {
   const {
@@ -33,6 +33,14 @@ export function ShoppingView() {
   const [hideBought, setHideBought] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [confirmRemoveName, setConfirmRemoveName] = useState("");
+
+  const navigate = (direction: 1 | -1) => {
+    setSelection((current) => {
+      const date = getDateForIsoWeek(current.isoYear, current.isoWeek, 0);
+      date.setDate(date.getDate() + direction * 7);
+      return getIsoWeekInfo(date);
+    });
+  };
 
   const shoppingItems = getShoppingList(selection.isoYear, selection.isoWeek);
   const visibleItems = hideBought ? shoppingItems.filter((item) => !item.bought) : shoppingItems;
@@ -72,23 +80,41 @@ export function ShoppingView() {
         </div>
 
         <div className="mt-5 space-y-4">
-          <select
-            aria-label="Selected shopping week"
-            value={`${selection.isoYear}-${selection.isoWeek}`}
-            onChange={(event) => {
-              const [year, week] = event.target.value.split("-").map(Number);
-              setSelection({ isoYear: year, isoWeek: week });
-            }}
-          >
-            {weekOptions.map((option) => (
-              <option
-                key={`${option.isoYear}-${option.isoWeek}`}
-                value={`${option.isoYear}-${option.isoWeek}`}
-              >
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Previous week"
+              className="rounded-2xl px-3 py-3 font-semibold button-secondary leading-none"
+              onClick={() => navigate(-1)}
+            >
+              ←
+            </button>
+            <select
+              aria-label="Selected shopping week"
+              value={`${selection.isoYear}-${selection.isoWeek}`}
+              onChange={(event) => {
+                const [year, week] = event.target.value.split("-").map(Number);
+                setSelection({ isoYear: year, isoWeek: week });
+              }}
+            >
+              {weekOptions.map((option) => (
+                <option
+                  key={`${option.isoYear}-${option.isoWeek}`}
+                  value={`${option.isoYear}-${option.isoWeek}`}
+                >
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label="Next week"
+              className="rounded-2xl px-3 py-3 font-semibold button-secondary leading-none"
+              onClick={() => navigate(1)}
+            >
+              →
+            </button>
+          </div>
 
           <div className="rounded-[24px] bg-accent-soft p-4">
             <div className="text-sm font-semibold text-muted">
@@ -258,7 +284,7 @@ export function ShoppingView() {
                           <div className="text-xs uppercase tracking-[0.2em] text-muted">
                             Needed
                           </div>
-                          <div className="font-semibold">{formatQuantity(item.needed, item.unit)}</div>
+                          <div className="font-semibold">{formatQuantity(roundToStandardSize(item.needed, item.unit), item.unit)}</div>
                         </div>
                         <div>
                           <div className="text-xs uppercase tracking-[0.2em] text-muted">
@@ -272,18 +298,17 @@ export function ShoppingView() {
                           <div className="text-xs uppercase tracking-[0.2em] text-muted">
                             To buy
                           </div>
-                          <div className="font-semibold">{formatQuantity(item.toBuy, item.unit)}</div>
+                          <div className="font-semibold">{formatQuantity(roundToStandardSize(item.toBuy, item.unit), item.unit)}</div>
                         </div>
                         <div className="flex flex-col gap-2">
                           <button
                             type="button"
-                            className="rounded-2xl px-4 py-3 text-sm font-semibold button-secondary disabled:opacity-45"
-                            disabled={item.bought}
+                            className={`rounded-2xl px-4 py-3 text-sm font-semibold ${item.bought ? "button-primary" : "button-secondary"}`}
                             onClick={() =>
                               markShoppingItemBought(selection.isoYear, selection.isoWeek, item.id)
                             }
                           >
-                            {item.bought ? "Bought" : "Mark bought"}
+                            {item.bought ? "✓ Bought" : "Mark bought"}
                           </button>
                           {item.source === "manual" ? (
                             <button
