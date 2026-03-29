@@ -635,13 +635,18 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   const markShoppingItemBought = useCallback(
     (isoYear: number, isoWeek: number, itemId: string) => {
       setData((prev) => {
-        const already = prev.boughtItemIds.some(
+        const alreadyIndex = prev.boughtItemIds.findIndex(
           (b) =>
             b.isoYear === isoYear &&
             b.isoWeek === isoWeek &&
             b.itemId === itemId,
         );
-        if (already) return prev;
+        if (alreadyIndex !== -1) {
+          return {
+            ...prev,
+            boughtItemIds: prev.boughtItemIds.filter((_, i) => i !== alreadyIndex),
+          };
+        }
         return {
           ...prev,
           boughtItemIds: [
