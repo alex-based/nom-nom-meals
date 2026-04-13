@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePlanner } from "@/components/planner-provider";
 import { MEAL_SLOTS } from "@/lib/constants";
 import { formatRange, formatShortDate, getDateForIsoWeek, getIsoWeekInfo, getWeekOptions } from "@/lib/date";
@@ -80,14 +80,45 @@ export function WeekPlanner() {
 
   const weekPlan = getWeekPlan(selection.isoYear, selection.isoWeek);
   const summary = getWeekSummary(selection.isoYear, selection.isoWeek);
-  const recipes = data.recipes.filter((recipe) => !recipe.archived);
-  const recipeMap = recipeById(recipes);
+  const recipes = useMemo(
+    () => data.recipes.filter((recipe) => !recipe.archived),
+    [data.recipes],
+  );
+  const recipeMap = useMemo(() => recipeById(recipes), [recipes]);
   const weekOptions = getWeekOptions(new Date(), 16);
   const today = new Date();
 
-  const slotOptions = Object.fromEntries(
-    MEAL_SLOTS.map((slot) => [slot, recipes.filter((recipe) => recipe.mealType === slot)]),
-  ) as Record<(typeof MEAL_SLOTS)[number], typeof recipes>;
+  const slotOptions = useMemo(
+    () =>
+      Object.fromEntries(
+        MEAL_SLOTS.map((slot) => [slot, recipes.filter((recipe) => recipe.mealType === slot)]),
+      ) as Record<(typeof MEAL_SLOTS)[number], typeof recipes>,
+    [recipes],
+  );
+
+  const monthDays = useMemo(
+    () => getMonthCalendarDays(monthSel.year, monthSel.month),
+    [monthSel.year, monthSel.month],
+  );
+
+  // Pre-compute meals for every day in the month view so the calendar grid
+  // doesn't call getWeekPlan + entriesForSlot for every cell on every render.
+  const dayMealsMap = useMemo(() => {
+    type DayMeal = { slot: string; recipe: (typeof recipes)[number]; cooked: boolean };
+    const map = new Map<string, DayMeal[]>();
+    for (const date of monthDays) {
+      const { isoYear: dayIsoYear, isoWeek: dayIsoWeek } = getIsoWeekInfo(date);
+      const dayPlan = getWeekPlan(dayIsoYear, dayIsoWeek);
+      const dayIndex = (date.getUTCDay() + 6) % 7;
+      const meals = MEAL_SLOTS.map((slot) => {
+        const entry = entriesForSlot(dayPlan, slot)[dayIndex];
+        const recipe = entry.recipeId ? recipeMap.get(entry.recipeId) : null;
+        return recipe ? { slot, recipe, cooked: entry.cooked } : null;
+      }).filter(Boolean) as DayMeal[];
+      map.set(date.toISOString(), meals);
+    }
+    return map;
+  }, [monthDays, getWeekPlan, recipeMap, recipes]);
 
   const navigate = (direction: 1 | -1) => {
     setSelection((current) => stepWeek(current.isoYear, current.isoWeek, direction));
@@ -102,8 +133,6 @@ export function WeekPlanner() {
       return { year, month };
     });
   };
-
-  const monthDays = getMonthCalendarDays(monthSel.year, monthSel.month);
 
   return (
     <div className="space-y-6">
@@ -473,7 +502,11 @@ export function WeekPlanner() {
                               type="button"
                               className="w-full rounded-2xl px-3 py-2 text-sm font-semibold button-ghost"
                               onClick={() => {
-                                if (!leftoverDraft.name || !leftoverDraft.quantity) return;
+                                if (
+                                  !leftoverDraft.name.trim() ||
+                                  !leftoverDraft.quantity ||
+                                  Number(leftoverDraft.quantity) <= 0
+                                ) return;
                                 addLeftover(
                                   leftoverDraft.name,
                                   Number(leftoverDraft.quantity),
@@ -523,15 +556,7 @@ export function WeekPlanner() {
                 date.getUTCMonth() === today.getMonth() &&
                 date.getUTCDate() === today.getDate();
 
-              const { isoYear: dayIsoYear, isoWeek: dayIsoWeek } = getIsoWeekInfo(date);
-              const dayPlan = getWeekPlan(dayIsoYear, dayIsoWeek);
-              const dayIndex = (date.getUTCDay() + 6) % 7;
-
-              const plannedMeals = MEAL_SLOTS.map((slot) => {
-                const entry = entriesForSlot(dayPlan, slot)[dayIndex];
-                const recipe = entry.recipeId ? recipeMap.get(entry.recipeId) : null;
-                return recipe ? { slot, recipe, cooked: entry.cooked } : null;
-              }).filter(Boolean) as { slot: string; recipe: (typeof recipes)[number]; cooked: boolean }[];
+              const plannedMeals = dayMealsMap.get(date.toISOString()) ?? [];
 
               return (
                 <div

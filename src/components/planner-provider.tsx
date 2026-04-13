@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useToast } from "@/components/toast";
 import { CATEGORIES, MEAL_SLOTS } from "@/lib/constants";
 import { getIsoWeekInfo } from "@/lib/date";
 import { createId } from "@/lib/planner";
@@ -91,6 +92,7 @@ interface WeekSummary {
 }
 
 interface PlannerContextValue {
+  isLoading: boolean;
   data: {
     recipes: Recipe[];
     pantryItems: PantryItem[];
@@ -220,6 +222,11 @@ function entryId(
   return `entry::${isoYear}::${isoWeek}::${slot}::${dayIndex}`;
 }
 
+function parseEntryId(id: string): { slot: MealSlot; dayIndex: number } {
+  const parts = id.split("::");
+  return { slot: parts[3] as MealSlot, dayIndex: Number(parts[4]) };
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -227,6 +234,8 @@ function entryId(
 export function PlannerProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<StorageData>(EMPTY_DATA);
   const [isLoaded, setIsLoaded] = useState(false);
+  const { toast } = useToast();
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load all shared data from the server on first render.
   useEffect(() => {
@@ -235,19 +244,30 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
       .then((serverData) => {
         if (serverData) setData({ ...EMPTY_DATA, ...serverData });
       })
-      .catch(console.error)
+      .catch(() => toast("Failed to load data — refresh to try again", "error"))
       .finally(() => setIsLoaded(true));
-  }, []);
+  }, [toast]);
 
-  // Persist all data to the server whenever it changes.
+  // Persist all data to the server after a short debounce to avoid
+  // hammering the API on every keystroke or checkbox toggle.
   useEffect(() => {
     if (!isLoaded) return;
-    fetch("/api/data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    }).catch(console.error);
-  }, [data, isLoaded]);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      })
+        .then((r) => {
+          if (!r.ok) toast("Failed to save changes", "error");
+        })
+        .catch(() => toast("Failed to save — check your connection", "error"));
+    }, 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [data, isLoaded, toast]);
 
   const { isoYear: currentIsoYear, isoWeek: currentIsoWeek } = getIsoWeekInfo(
     new Date(),
@@ -432,9 +452,7 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
           weekEntries[idx] = { ...weekEntries[idx], ...updates };
         } else {
           // Entry doesn't exist yet – parse slot/dayIndex from deterministic id
-          const parts = id.split("::");
-          const slot = parts[3] as MealSlot;
-          const dayIndex = Number(parts[4]);
+          const { slot, dayIndex } = parseEntryId(id);
           weekEntries.push({
             id,
             isoYear,
@@ -470,9 +488,7 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
             e.id === id ? { ...e, cooked: true } : e,
           );
         } else {
-          const parts = id.split("::");
-          const slot = parts[3] as MealSlot;
-          const dayIndex = Number(parts[4]);
+          const { slot, dayIndex } = parseEntryId(id);
           weekEntries = [
             ...prev.weekEntries,
             {
@@ -746,6 +762,7 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const value: PlannerContextValue = {
+    isLoading: !isLoaded,
     data: {
       recipes: data.recipes,
       pantryItems: data.pantryItems,
@@ -773,6 +790,14 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <PlannerContext.Provider value={value}>{children}</PlannerContext.Provider>
+    <PlannerContext.Provider value={value}>
+      {!isLoaded ? (
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <p className="text-sm text-muted animate-pulse">Loading…</p>
+        </div>
+      ) : (
+        children
+      )}
+    </PlannerContext.Provider>
   );
 }
