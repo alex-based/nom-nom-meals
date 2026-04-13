@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getData, setData } from "@/lib/server-store";
 
 export async function GET() {
-  return NextResponse.json(getData() ?? null);
+  const data = await getData();
+  return NextResponse.json(data ?? null);
 }
 
 export async function POST(request: NextRequest) {
@@ -12,6 +13,6 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
-  setData(body);
+  await setData(body);
   return NextResponse.json({ ok: true });
 }
