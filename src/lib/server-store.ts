@@ -1,12 +1,22 @@
-// Server-side in-memory store for all app data, shared across every user.
-// Data persists for the lifetime of the Node.js process.
-// For durable persistence across restarts, replace with a database (e.g. Supabase).
-let store: unknown = null;
+import { getPool } from "@/lib/db";
 
-export function getData(): unknown {
-  return store;
+const DATA_KEY = "household";
+
+export async function getData(): Promise<unknown> {
+  const pool = await getPool();
+  const result = await pool.query<{ value: unknown }>(
+    "SELECT value FROM app_data WHERE key = $1",
+    [DATA_KEY],
+  );
+  return result.rows[0]?.value ?? null;
 }
 
-export function setData(data: unknown): void {
-  store = data;
+export async function setData(data: unknown): Promise<void> {
+  const pool = await getPool();
+  await pool.query(
+    `INSERT INTO app_data (key, value, updated_at)
+     VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()`,
+    [DATA_KEY, JSON.stringify(data)],
+  );
 }
