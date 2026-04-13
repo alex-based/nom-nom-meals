@@ -62,8 +62,6 @@ interface StorageData {
 // Persistence helpers
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = "nom-nom-meals-data";
-
 const EMPTY_DATA: StorageData = {
   recipes: [],
   pantryItems: [],
@@ -72,26 +70,6 @@ const EMPTY_DATA: StorageData = {
   manualShoppingItems: [],
   boughtItemIds: [],
 };
-
-function loadData(): StorageData {
-  if (typeof window === "undefined") return EMPTY_DATA;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return EMPTY_DATA;
-    return { ...EMPTY_DATA, ...JSON.parse(raw) };
-  } catch {
-    return EMPTY_DATA;
-  }
-}
-
-function saveData(data: StorageData): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Storage unavailable – fail silently
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Context
@@ -250,17 +228,25 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<StorageData>(EMPTY_DATA);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load from localStorage after first client render
+  // Load all shared data from the server on first render.
   useEffect(() => {
-    setData(loadData());
-    setIsLoaded(true);
+    fetch("/api/data")
+      .then((r) => r.json())
+      .then((serverData) => {
+        if (serverData) setData({ ...EMPTY_DATA, ...serverData });
+      })
+      .catch(console.error)
+      .finally(() => setIsLoaded(true));
   }, []);
 
-  // Persist to localStorage whenever data changes (skip the initial empty state)
+  // Persist all data to the server whenever it changes.
   useEffect(() => {
-    if (isLoaded) {
-      saveData(data);
-    }
+    if (!isLoaded) return;
+    fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).catch(console.error);
   }, [data, isLoaded]);
 
   const { isoYear: currentIsoYear, isoWeek: currentIsoWeek } = getIsoWeekInfo(
