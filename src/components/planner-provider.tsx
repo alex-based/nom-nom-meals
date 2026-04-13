@@ -62,8 +62,6 @@ interface StorageData {
 // Persistence helpers
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = "nom-nom-meals-data";
-
 const EMPTY_DATA: StorageData = {
   recipes: [],
   pantryItems: [],
@@ -72,26 +70,6 @@ const EMPTY_DATA: StorageData = {
   manualShoppingItems: [],
   boughtItemIds: [],
 };
-
-function loadData(): StorageData {
-  if (typeof window === "undefined") return EMPTY_DATA;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return EMPTY_DATA;
-    return { ...EMPTY_DATA, ...JSON.parse(raw) };
-  } catch {
-    return EMPTY_DATA;
-  }
-}
-
-function saveData(data: StorageData): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Storage unavailable – fail silently
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Context
@@ -250,37 +228,25 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<StorageData>(EMPTY_DATA);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load personal data from localStorage; load shared recipes from the server.
+  // Load all shared data from the server on first render.
   useEffect(() => {
-    const localData = loadData();
-    setData(localData);
-
-    fetch("/api/recipes")
+    fetch("/api/data")
       .then((r) => r.json())
-      .then((apiRecipes: Recipe[]) => {
-        if (apiRecipes.length > 0) {
-          // Use the server's shared recipe list as the source of truth.
-          setData((prev) => ({ ...prev, recipes: apiRecipes }));
-        } else if (localData.recipes.length > 0) {
-          // First run: migrate any existing localStorage recipes to the shared store.
-          for (const recipe of localData.recipes) {
-            fetch("/api/recipes", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(recipe),
-            }).catch(console.error);
-          }
-        }
+      .then((serverData) => {
+        if (serverData) setData({ ...EMPTY_DATA, ...serverData });
       })
       .catch(console.error)
       .finally(() => setIsLoaded(true));
   }, []);
 
-  // Persist to localStorage whenever data changes (skip the initial empty state)
+  // Persist all data to the server whenever it changes.
   useEffect(() => {
-    if (isLoaded) {
-      saveData(data);
-    }
+    if (!isLoaded) return;
+    fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).catch(console.error);
   }, [data, isLoaded]);
 
   const { isoYear: currentIsoYear, isoWeek: currentIsoWeek } = getIsoWeekInfo(
@@ -603,78 +569,49 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const createOrUpdateRecipe = useCallback((draft: RecipeDraft) => {
-    let recipeToSync: Recipe | null = null;
-
-    if (draft.id) {
-      const existing = dataRef.current.recipes.find((r) => r.id === draft.id);
-      if (existing) {
-        const { id: _id, ...rest } = draft;
-        recipeToSync = { ...existing, ...rest };
-      }
-    } else {
-      const { id: _id, ...rest } = draft;
-      recipeToSync = { ...rest, id: createId("recipe"), archived: false };
-    }
-
-    if (!recipeToSync) return;
-    const synced = recipeToSync;
-
     setData((prev) => {
       const recipes = [...prev.recipes];
       if (draft.id) {
         const idx = recipes.findIndex((r) => r.id === draft.id);
-        if (idx >= 0) recipes[idx] = synced;
+        if (idx >= 0) {
+          const { id: _id, ...rest } = draft;
+          recipes[idx] = { ...recipes[idx], ...rest };
+        }
       } else {
-        recipes.push(synced);
+        const { id: _id, ...rest } = draft;
+        recipes.push({ ...rest, id: createId("recipe"), archived: false });
       }
       return { ...prev, recipes };
     });
-
-    fetch("/api/recipes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(synced),
-    }).catch(console.error);
   }, []);
 
   const archiveRecipe = useCallback((id: string) => {
-    const recipe = dataRef.current.recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const archived = { ...recipe, archived: true };
-
     setData((prev) => ({
       ...prev,
-      recipes: prev.recipes.map((r) => (r.id === id ? archived : r)),
+      recipes: prev.recipes.map((r) =>
+        r.id === id ? { ...r, archived: true } : r,
+      ),
     }));
-
-    fetch("/api/recipes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(archived),
-    }).catch(console.error);
   }, []);
 
   const duplicateRecipe = useCallback((id: string) => {
-    const recipe = dataRef.current.recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const { id: _id, ...rest } = recipe;
-    const duplicate: Recipe = {
-      ...rest,
-      id: createId("recipe"),
-      title: `Copy of ${recipe.title}`,
-      archived: false,
-    };
-
-    setData((prev) => ({
-      ...prev,
-      recipes: [...prev.recipes, duplicate],
-    }));
-
-    fetch("/api/recipes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(duplicate),
-    }).catch(console.error);
+    setData((prev) => {
+      const recipe = prev.recipes.find((r) => r.id === id);
+      if (!recipe) return prev;
+      const { id: _id, ...rest } = recipe;
+      return {
+        ...prev,
+        recipes: [
+          ...prev.recipes,
+          {
+            ...rest,
+            id: createId("recipe"),
+            title: `Copy of ${recipe.title}`,
+            archived: false,
+          },
+        ],
+      };
+    });
   }, []);
 
   // -------------------------------------------------------------------------
