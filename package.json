@@ -12,7 +12,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "^15.2.4",
+    "next": "^15.5.18",
     "parse-ingredient": "^2.1.0",
     "pg": "^8.13.3",
     "react": "^19.0.0",
